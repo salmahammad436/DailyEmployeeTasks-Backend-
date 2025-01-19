@@ -2,12 +2,50 @@ import pool from "../db.js";
 
 export const getAllTasks = async (req, res) => {
   try {
-    const allTasks = await pool.query("SELECT * FROM tasks ");
-    res.json(allTasks.rows);
+    const query = `
+      SELECT 
+        t.*,
+        e.name AS employee_name,
+        CASE 
+          WHEN (t.date + t.end_time::time)::timestamp > CURRENT_TIMESTAMP 
+          THEN 
+            EXTRACT(EPOCH FROM ((t.date + t.end_time::time)::timestamp - CURRENT_TIMESTAMP))/3600
+          ELSE 0 
+        END AS remaining_hours,
+        CASE 
+          WHEN (t.date + t.end_time::time)::timestamp < CURRENT_TIMESTAMP THEN 'completed'
+          WHEN (t.date + t.start_time::time)::timestamp <= CURRENT_TIMESTAMP AND 
+               (t.date + t.end_time::time)::timestamp >= CURRENT_TIMESTAMP THEN 'in-progress'
+          ELSE 'pending'
+        END AS status
+      FROM tasks t
+      LEFT JOIN employees e ON t.employee_id = e.id
+      ORDER BY 
+        t.date DESC,
+        t.start_time ASC
+    `;
+    
+    const allTasks = await pool.query(query);
+    
+    // Format the response to round remaining hours
+    const formattedTasks = allTasks.rows.map(task => ({
+      ...task,
+      remaining_hours: task.remaining_hours > 0 
+        ? Math.round(task.remaining_hours * 10) / 10 
+        : 0
+    }));
+
+    res.json(formattedTasks);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Error fetching tasks:', err);
+    res.status(500).json({ 
+      error: 'Failed to fetch tasks',
+      details: err.message 
+    });
   }
 };
+
+
 
 export const getTasks = async (req, res) => {
   const { employeeId, date } = req.params;
@@ -22,7 +60,7 @@ export const getTasks = async (req, res) => {
         WHERE employee_id = $1 AND date = $2
         GROUP BY t.id
       `,
-      [employeeId, date]
+      [employeeId, date] 
     );
     const tasks = result.rows;
     const total_hours = tasks.reduce(
