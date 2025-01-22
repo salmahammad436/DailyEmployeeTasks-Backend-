@@ -6,12 +6,23 @@ export const getAllTasks = async (req, res) => {
       SELECT 
         t.*,
         e.name AS employee_name,
+        -- Calculate the total hours worked based on start_time and end_time
         CASE 
           WHEN (t.date + t.end_time::time)::timestamp > CURRENT_TIMESTAMP 
           THEN 
-            EXTRACT(EPOCH FROM ((t.date + t.end_time::time)::timestamp - CURRENT_TIMESTAMP))/3600
+            EXTRACT(EPOCH FROM ((t.date + t.end_time::time)::timestamp - (t.date + t.start_time::time)::timestamp))/3600
+          ELSE 0 
+        END AS total_hours_worked,
+        
+        -- Calculate remaining hours by subtracting worked hours from 8
+        CASE 
+          WHEN (t.date + t.end_time::time)::timestamp > CURRENT_TIMESTAMP 
+          THEN 
+            8 - (EXTRACT(EPOCH FROM ((t.date + t.end_time::time)::timestamp - (t.date + t.start_time::time)::timestamp))/3600)
           ELSE 0 
         END AS remaining_hours,
+        
+        -- Determine the task status
         CASE 
           WHEN (t.date + t.end_time::time)::timestamp < CURRENT_TIMESTAMP THEN 'completed'
           WHEN (t.date + t.start_time::time)::timestamp <= CURRENT_TIMESTAMP AND 
@@ -32,7 +43,8 @@ export const getAllTasks = async (req, res) => {
       ...task,
       remaining_hours: task.remaining_hours > 0 
         ? Math.round(task.remaining_hours * 10) / 10 
-        : 0
+        : 0,
+      total_hours_worked: Math.round(task.total_hours_worked * 10) / 10 // You can also round worked hours if necessary
     }));
 
     res.json(formattedTasks);
@@ -47,39 +59,40 @@ export const getAllTasks = async (req, res) => {
 
 
 
-export const getTasks = async (req, res) => {
-  const { employeeId, date } = req.params;
+// export const getTasks = async (req, res) => {
+//   const { employeeId, date } = req.params;
+//   try {
+//     const result = await pool.query(
+//       `
+//         SELECT 
+//           t.*,
+//           COALESCE(SUM(EXTRACT(EPOCH FROM (t.end_time - t.start_time))/3600), 0) as total_hours
+//         FROM tasks t
+//         WHERE employee_id = $1 AND date = $2
+//         GROUP BY t.id
+//       `,
+//       [employeeId, date] 
+//     );
+//     const tasks = result.rows;
+//     const total_hours = tasks.reduce(
+//       (acc, task) => acc + parseFloat(task.total_hours),
+//       0
+//     );
 
-  try {
-    const result = await pool.query(
-      `
-        SELECT 
-          t.*,
-          COALESCE(SUM(EXTRACT(EPOCH FROM (t.end_time - t.start_time))/3600), 0) as total_hours
-        FROM tasks t
-        WHERE employee_id = $1 AND date = $2
-        GROUP BY t.id
-      `,
-      [employeeId, date] 
-    );
-    const tasks = result.rows;
-    const total_hours = tasks.reduce(
-      (acc, task) => acc + parseFloat(task.total_hours),
-      0
-    );
-    const remaining_hours = 8 - total_hours;
 
-    const summary = {
-      total_hours,
-      remaining_hours,
-      tasks,
-    };
+//     const remaining_hours = 8 - total_hours;
 
-    res.json(summary);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+//     const summary = {
+//       total_hours,
+//       remaining_hours,
+//       tasks,
+//     };
+
+//     res.json(summary);
+//   } catch (err) {
+//     res.status(500).json({ error: err.message });
+//   }
+// };
 
 //createTask
 export const createTask = async (req, res) => {
@@ -151,6 +164,7 @@ export const updateTask = async (req, res) => {
   }
 };
 
+
 //deleteTask
 export const deleteTask = async (req, res) => {
   const { taskId } = req.params;
@@ -174,7 +188,7 @@ export const deleteTask = async (req, res) => {
     });
   } catch (err) {
     // Handle unexpected errors
-    console.error("Error deleting task:", err); // Log the error for debugging purposes
+    console.error("Error deleting task:", err);
     res
       .status(500)
       .json({ error: "An error occurred while deleting the task" });
